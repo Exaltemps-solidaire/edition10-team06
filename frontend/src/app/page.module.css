@@ -11,17 +11,13 @@
 
 .page {
   min-height: 100vh;
-  background: #c8d8e8;
-  display: flex;
-  justify-content: center;
+  background: var(--ecume);
   font-family: "Nunito Sans", system-ui, sans-serif;
   color: var(--encre);
 }
 
 .wrap {
   width: 100%;
-  max-width: 480px;
-  background: var(--ecume);
   min-height: 100vh;
 }
 
@@ -67,7 +63,10 @@
 }
 
 .content {
-  padding: 20px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
   display: flex;
   flex-direction: column;
   gap: 16px;
