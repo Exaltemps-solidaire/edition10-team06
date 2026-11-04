@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { regrouperParEnseignant } from "./page";
 
-const base = { classe: "CM1-A", date: "2026-10-12", questionnaireRecu: false };
+const base = { classe: "CM1-A", commune: "Cannes", date: "2026-10-12", questionnaireRecu: false };
 
 describe("regrouperParEnseignant", () => {
   it("ne garde qu'une ligne par enseignant même avec plusieurs séances", () => {
