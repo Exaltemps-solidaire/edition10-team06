@@ -3,6 +3,7 @@
 import { useState } from "react";
 import styles from "./page.module.css";
 import { SEANCES_CACPL, type SeanceRecord } from "./data-cacpl";
+import { PROJETS, type ProjetResume } from "./data-projets";
 
 type Role = "admin" | "coordinatrice" | "animatrice";
 type Membre = { id: string; nom: string; role: Role };
@@ -21,6 +22,18 @@ const PROJET = {
   communes: 4,
   eleves: 3986,
 };
+
+// Seul projet avec un détail chiffré dans cette démo : le seul en statut "bilan" dans le jeu de test.
+const PROJET_DETAIL_ID = PROJETS.find((p) => p.statut === "bilan")?.id ?? PROJETS[0].id;
+
+const STATUT_LABELS: Record<ProjetResume["statut"], string> = { planification: "En cours", bilan: "Terminé" };
+
+type Source = { type: "fichier" | "lien"; valeur: string; misAJourLe: string };
+type ProjetAffiche = ProjetResume & { source?: Source };
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString("fr-FR");
+}
 
 type Seance = { id: string; enseignant: string; classe: string; commune: string; date: string; questionnaireRecu: boolean };
 
@@ -89,13 +102,107 @@ function degradeConique(items: { label: string; value: number }[]) {
   return `conic-gradient(${tranches.join(", ")})`;
 }
 
-type Ecran = "qui" | "succes" | "chiffres" | "graphiques" | "questionnaires" | "envoye";
+export type TypeRelance = "mail" | "telephone";
+export type Relance = { type: TypeRelance; date: string };
+
+function ilYA(jours: number) {
+  return new Date(Date.now() - jours * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// Historique de démonstration : deux enseignants ont déjà reçu une relance mail, les autres aucune.
+const RELANCES_INITIALES: Record<string, Relance[]> = {
+  "Mme Cyprès": [{ type: "mail", date: ilYA(3) }],
+  "Mme Écume": [{ type: "mail", date: ilYA(1) }],
+};
+
+// Une relance téléphonique est due quand la dernière action tracée est une relance mail vieille de 2 jours ou plus.
+export function relanceTelephoniqueDue(relances: Relance[], maintenant: Date = new Date()): boolean {
+  if (relances.length === 0) return false;
+  const derniere = relances[relances.length - 1];
+  if (derniere.type !== "mail") return false;
+  const jours = (maintenant.getTime() - new Date(derniere.date).getTime()) / (1000 * 60 * 60 * 24);
+  return jours >= 2;
+}
+
+function telephoneEstDerniereAction(relances: Relance[]) {
+  return relances.length > 0 && relances[relances.length - 1].type === "telephone";
+}
+
+function FormulaireSource({
+  nomInitial,
+  demanderNom,
+  onValider,
+  onAnnuler,
+}: {
+  nomInitial?: string;
+  demanderNom: boolean;
+  onValider: (nom: string, source: Source) => void;
+  onAnnuler: () => void;
+}) {
+  const [nom, setNom] = useState(nomInitial ?? "");
+  const [mode, setMode] = useState<"fichier" | "lien">("fichier");
+  const [fichier, setFichier] = useState<File | null>(null);
+  const [lien, setLien] = useState("");
+
+  const valeur = mode === "fichier" ? (fichier?.name ?? "") : lien.trim();
+  const pret = (!demanderNom || nom.trim().length > 0) && valeur.length > 0;
+
+  return (
+    <div className={styles.card}>
+      {demanderNom && (
+        <input
+          className={styles.select}
+          placeholder="Nom du projet"
+          value={nom}
+          onChange={(e) => setNom(e.target.value)}
+        />
+      )}
+      <div className={styles.pivotControls}>
+        <label className={styles.pivotField}>
+          <input type="radio" name="mode-source" checked={mode === "fichier"} onChange={() => setMode("fichier")} /> Fichier
+          Excel
+        </label>
+        <label className={styles.pivotField}>
+          <input type="radio" name="mode-source" checked={mode === "lien"} onChange={() => setMode("lien")} /> Lien web
+        </label>
+      </div>
+      {mode === "fichier" ? (
+        <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setFichier(e.target.files?.[0] ?? null)} />
+      ) : (
+        <input className={styles.select} placeholder="https://…" value={lien} onChange={(e) => setLien(e.target.value)} />
+      )}
+      <div className={styles.pivotControls}>
+        <button
+          className={styles.btnPrimary}
+          disabled={!pret}
+          onClick={() => onValider(nom.trim(), { type: mode, valeur, misAJourLe: new Date().toISOString() })}
+        >
+          Enregistrer
+        </button>
+        <button className={styles.btnSecondary} onClick={onAnnuler}>
+          Annuler
+        </button>
+      </div>
+      <p className={styles.muted}>Démonstration : le fichier n&apos;est pas réellement analysé, seul son nom est mémorisé.</p>
+    </div>
+  );
+}
+
+type Ecran = "qui" | "accueil" | "chiffres" | "graphiques" | "questionnaires";
 
 export default function Home() {
   const [utilisateur, setUtilisateur] = useState<Membre | null>(null);
   const [ecran, setEcran] = useState<Ecran>("qui");
-  const [seances, setSeances] = useState<Seance[]>(SEANCES_INITIALES);
+  const [projetActifId, setProjetActifId] = useState<string | null>(null);
+  const [projets, setProjets] = useState<ProjetAffiche[]>(PROJETS);
+  const [ajoutOuvert, setAjoutOuvert] = useState(false);
+  const [miseAJourId, setMiseAJourId] = useState<string | null>(null);
+
+  const [seances] = useState<Seance[]>(SEANCES_INITIALES);
   const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [relances, setRelances] = useState<Record<string, Relance[]>>(RELANCES_INITIALES);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+
   const [axe, setAxe] = useState<Axe>("mois");
   const [mesure, setMesure] = useState<Mesure>("eleves");
   const [typeGraphique, setTypeGraphique] = useState<TypeGraphique>("barres");
@@ -105,11 +212,35 @@ export default function Home() {
   const parCycle = agregerPivot(SEANCES_CACPL, "cycle", "eleves");
   const pivot = agregerPivot(SEANCES_CACPL, axe, mesure);
   const pivotMax = Math.max(1, ...pivot.map((p) => p.value));
+  const tousSelectionnes = lignesEnAttente.length > 0 && lignesEnAttente.every((l) => selection.has(l.enseignant));
 
-  function envoyerQuestionnaires() {
-    setSeances((prev) => prev.map((s) => (selection.has(s.enseignant) ? { ...s, questionnaireRecu: true } : s)));
+  function toggleTout() {
+    setSelection(tousSelectionnes ? new Set() : new Set(lignesEnAttente.map((l) => l.enseignant)));
+  }
+
+  function envoyerRelances() {
+    const maintenant = new Date().toISOString();
+    setRelances((prev) => {
+      const next = { ...prev };
+      for (const ens of selection) next[ens] = [...(next[ens] ?? []), { type: "mail", date: maintenant }];
+      return next;
+    });
+    setConfirmation(`Relance mail envoyée à ${selection.size} enseignant${selection.size > 1 ? "s" : ""}.`);
     setSelection(new Set());
-    setEcran("envoye");
+  }
+
+  function basculerRelanceTelephonique(enseignant: string, faite: boolean) {
+    setRelances((prev) => {
+      const liste = prev[enseignant] ?? [];
+      if (faite) return { ...prev, [enseignant]: [...liste, { type: "telephone" as const, date: new Date().toISOString() }] };
+      if (!telephoneEstDerniereAction(liste)) return prev;
+      return { ...prev, [enseignant]: liste.slice(0, -1) };
+    });
+  }
+
+  function navTopnav(cible: Ecran) {
+    setConfirmation(null);
+    setEcran(cible);
   }
 
   return (
@@ -119,7 +250,7 @@ export default function Home() {
           <div>
             <div className={styles.brand}>Méditerranée 2000</div>
             <div>Rapports de projet</div>
-            {utilisateur && <div className={styles.headerSub}>{PROJET.nom}</div>}
+            {projetActifId && ecran !== "accueil" && <div className={styles.headerSub}>{PROJET.nom}</div>}
           </div>
           {utilisateur && (
             <div className={styles.whoami}>
@@ -129,6 +260,38 @@ export default function Home() {
             </div>
           )}
         </header>
+
+        {utilisateur && (
+          <nav className={styles.topnav}>
+            <button
+              className={ecran === "accueil" ? `${styles.topnavBtn} ${styles.topnavBtnActive}` : styles.topnavBtn}
+              onClick={() => navTopnav("accueil")}
+            >
+              Accueil
+            </button>
+            <button
+              className={ecran === "chiffres" ? `${styles.topnavBtn} ${styles.topnavBtnActive}` : styles.topnavBtn}
+              disabled={!projetActifId}
+              onClick={() => navTopnav("chiffres")}
+            >
+              Chiffres clés
+            </button>
+            <button
+              className={ecran === "graphiques" ? `${styles.topnavBtn} ${styles.topnavBtnActive}` : styles.topnavBtn}
+              disabled={!projetActifId}
+              onClick={() => navTopnav("graphiques")}
+            >
+              Graphiques
+            </button>
+            <button
+              className={ecran === "questionnaires" ? `${styles.topnavBtn} ${styles.topnavBtnActive}` : styles.topnavBtn}
+              disabled={!projetActifId}
+              onClick={() => navTopnav("questionnaires")}
+            >
+              Questionnaires{projetActifId ? ` (${lignesEnAttente.length})` : ""}
+            </button>
+          </nav>
+        )}
 
         <div className={styles.content}>
           {ecran === "qui" && (
@@ -142,7 +305,7 @@ export default function Home() {
                       style={{ border: "none", width: "100%", textAlign: "left", font: "inherit" }}
                       onClick={() => {
                         setUtilisateur(m);
-                        setEcran("succes");
+                        setEcran("accueil");
                       }}
                     >
                       <span className={styles.memberName}>{m.nom}</span>
@@ -154,23 +317,91 @@ export default function Home() {
             </>
           )}
 
-          {ecran === "succes" && (
+          {ecran === "accueil" && (
             <>
-              <div className={styles.successBanner}>
-                <span style={{ fontSize: 24 }}>✓</span>
-                <span>
-                  <strong>{PROJET.fichier}</strong> importé : données déjà rassemblées pour {PROJET.nom}.
-                </span>
-              </div>
-              <button className={styles.btnPrimary} onClick={() => setEcran("chiffres")}>
-                Chiffres clés
-              </button>
-              <button className={styles.btnOutlineMer} onClick={() => setEcran("graphiques")}>
-                Graphiques
-              </button>
-              <button className={styles.btnSecondary} onClick={() => setEcran("questionnaires")}>
-                Questionnaires en attente ({lignesEnAttente.length})
-              </button>
+              <div className={styles.sectionTitle}>Projets</div>
+              <ul className={styles.list}>
+                {projets.map((p) => (
+                  <li className={styles.rowCardColonne} key={p.id}>
+                    <div className={styles.rowHead}>
+                      <span className={styles.memberName}>{p.nom}</span>
+                      <span className={styles.badge}>{STATUT_LABELS[p.statut]}</span>
+                    </div>
+                    <div className={styles.rowMeta}>
+                      {p.anneeScolaire} · {p.classesInscrites} classe{p.classesInscrites > 1 ? "s" : ""} inscrite
+                      {p.classesInscrites > 1 ? "s" : ""}
+                    </div>
+                    <div className={styles.rowMeta}>
+                      {p.seancesRealisees} / {p.seancesPrevues} séance{p.seancesPrevues > 1 ? "s" : ""} réalisée
+                      {p.seancesRealisees > 1 ? "s" : ""} à date
+                    </div>
+                    {p.source ? (
+                      <div className={styles.muted}>
+                        Source : {p.source.type === "fichier" ? "fichier" : "lien"} <strong>{p.source.valeur}</strong> · mis à
+                        jour le {formatDate(p.source.misAJourLe)}
+                      </div>
+                    ) : (
+                      <div className={styles.muted}>Aucune source liée pour l&apos;instant.</div>
+                    )}
+                    <div className={styles.pivotControls}>
+                      {p.id === PROJET_DETAIL_ID && (
+                        <button
+                          className={styles.btnPrimary}
+                          onClick={() => {
+                            setProjetActifId(p.id);
+                            setEcran("chiffres");
+                          }}
+                        >
+                          Voir le détail
+                        </button>
+                      )}
+                      <button
+                        className={styles.btnOutlineMer}
+                        onClick={() => setMiseAJourId(miseAJourId === p.id ? null : p.id)}
+                      >
+                        {p.source ? "Mettre à jour la source" : "Lier une source"}
+                      </button>
+                    </div>
+                    {miseAJourId === p.id && (
+                      <FormulaireSource
+                        demanderNom={false}
+                        onAnnuler={() => setMiseAJourId(null)}
+                        onValider={(_nom, source) => {
+                          setProjets((prev) => prev.map((x) => (x.id === p.id ? { ...x, source } : x)));
+                          setMiseAJourId(null);
+                        }}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              {ajoutOuvert ? (
+                <FormulaireSource
+                  demanderNom
+                  onAnnuler={() => setAjoutOuvert(false)}
+                  onValider={(nom, source) => {
+                    setProjets((prev) => [
+                      ...prev,
+                      {
+                        id: `nouveau-${prev.length + 1}`,
+                        nom,
+                        anneeScolaire: "2026-2027",
+                        statut: "planification",
+                        classesInscrites: 0,
+                        seancesRealisees: 0,
+                        seancesPrevues: 0,
+                        source,
+                      },
+                    ]);
+                    setAjoutOuvert(false);
+                  }}
+                />
+              ) : (
+                <button className={styles.btnOutlineMer} onClick={() => setAjoutOuvert(true)}>
+                  + Ajouter un projet
+                </button>
+              )}
             </>
           )}
 
@@ -226,8 +457,8 @@ export default function Home() {
                 est comptée à chaque fois) — ce n&apos;est pas le nombre d&apos;élèves distincts.
               </p>
 
-              <button className={styles.btnSecondary} onClick={() => setEcran("succes")}>
-                Retour
+              <button className={styles.btnSecondary} onClick={() => setEcran("accueil")}>
+                Retour à l&apos;accueil
               </button>
             </>
           )}
@@ -306,8 +537,8 @@ export default function Home() {
                 </div>
               )}
 
-              <button className={styles.btnSecondary} onClick={() => setEcran("succes")}>
-                Retour
+              <button className={styles.btnSecondary} onClick={() => setEcran("accueil")}>
+                Retour à l&apos;accueil
               </button>
             </>
           )}
@@ -315,51 +546,70 @@ export default function Home() {
           {ecran === "questionnaires" && (
             <>
               <div className={styles.sectionTitle}>Questionnaires en attente</div>
+              {confirmation && (
+                <div className={styles.successBanner}>
+                  <span style={{ fontSize: 24 }}>✓</span>
+                  <span>{confirmation}</span>
+                </div>
+              )}
+              <label className={styles.rowLabel}>
+                <input type="checkbox" checked={tousSelectionnes} onChange={toggleTout} />
+                <strong>Tout sélectionner</strong>
+              </label>
               <ul className={styles.list}>
-                {lignesEnAttente.map((l) => (
-                  <li className={styles.rowCard} key={l.enseignant}>
-                    <label className={styles.rowLabel}>
-                      <input
-                        type="checkbox"
-                        checked={selection.has(l.enseignant)}
-                        onChange={(e) => {
-                          const next = new Set(selection);
-                          if (e.target.checked) next.add(l.enseignant);
-                          else next.delete(l.enseignant);
-                          setSelection(next);
-                        }}
-                      />
-                      <span>
-                        <div>{l.enseignant}</div>
-                        <div className={styles.rowMeta}>
-                          {l.classe} · {l.commune} · {l.ids.length} séance{l.ids.length > 1 ? "s" : ""}
-                        </div>
-                      </span>
-                    </label>
-                    <span className={styles.badge}>en attente</span>
-                  </li>
-                ))}
+                {lignesEnAttente.map((l) => {
+                  const historique = relances[l.enseignant] ?? [];
+                  const due = relanceTelephoniqueDue(historique);
+                  const telephoneFaite = telephoneEstDerniereAction(historique);
+                  return (
+                    <li className={styles.rowCardColonne} key={l.enseignant}>
+                      <div className={styles.rowHead}>
+                        <label className={styles.rowLabel}>
+                          <input
+                            type="checkbox"
+                            checked={selection.has(l.enseignant)}
+                            onChange={(e) => {
+                              const next = new Set(selection);
+                              if (e.target.checked) next.add(l.enseignant);
+                              else next.delete(l.enseignant);
+                              setSelection(next);
+                            }}
+                          />
+                          <span>
+                            <div>{l.enseignant}</div>
+                            <div className={styles.rowMeta}>
+                              {l.classe} · {l.commune} · {l.ids.length} séance{l.ids.length > 1 ? "s" : ""}
+                            </div>
+                          </span>
+                        </label>
+                        <span className={styles.badge}>en attente</span>
+                      </div>
+                      <div className={styles.muted}>
+                        {historique.length === 0
+                          ? "Aucune relance envoyée."
+                          : historique
+                              .map((r) => `${r.type === "mail" ? "Relance mail" : "Relance téléphonique"} le ${formatDate(r.date)}`)
+                              .join(" · ")}
+                      </div>
+                      {due && !telephoneFaite && <span className={styles.badgeAlerte}>☎ Relance téléphonique à faire</span>}
+                      <label className={styles.rowLabel}>
+                        <input
+                          type="checkbox"
+                          checked={telephoneFaite}
+                          onChange={(e) => basculerRelanceTelephonique(l.enseignant, e.target.checked)}
+                        />
+                        Relance téléphonique faite
+                      </label>
+                    </li>
+                  );
+                })}
               </ul>
               <p className={styles.muted}>+ 122 autres classes sans questionnaire dans le jeu de test complet.</p>
-              <button className={styles.btnPrimary} disabled={selection.size === 0} onClick={envoyerQuestionnaires}>
-                Envoyer le questionnaire (en copie cachée)
+              <button className={styles.btnPrimary} disabled={selection.size === 0} onClick={envoyerRelances}>
+                Envoyer la relance mail ({selection.size})
               </button>
-              <button className={styles.btnSecondary} onClick={() => setEcran("succes")}>
-                Retour
-              </button>
-            </>
-          )}
-
-          {ecran === "envoye" && (
-            <>
-              <div className={styles.successBanner}>
-                <span style={{ fontSize: 24 }}>✓</span>
-                <span>
-                  Questionnaire envoyé en copie cachée. <strong>Rappel automatique</strong> prévu à 14 jours sans réponse.
-                </span>
-              </div>
-              <button className={styles.btnPrimary} onClick={() => setEcran("questionnaires")}>
-                Retour aux questionnaires en attente
+              <button className={styles.btnSecondary} onClick={() => setEcran("accueil")}>
+                Retour à l&apos;accueil
               </button>
             </>
           )}

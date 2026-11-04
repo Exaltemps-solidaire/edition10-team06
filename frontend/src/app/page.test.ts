@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agregerPivot, regrouperParEnseignant } from "./page";
+import { agregerPivot, regrouperParEnseignant, relanceTelephoniqueDue, type Relance } from "./page";
 import type { SeanceRecord } from "./data-cacpl";
 
 const base = { classe: "CM1-A", commune: "Cannes", date: "2026-10-12", questionnaireRecu: false };
@@ -35,5 +35,27 @@ describe("agregerPivot", () => {
 
   it("trie l'axe mois par ordre chronologique plutôt que par valeur", () => {
     expect(agregerPivot(data, "mois", "seances").map((p) => p.label)).toEqual(["nov. 2025", "déc. 2025"]);
+  });
+});
+
+describe("relanceTelephoniqueDue", () => {
+  const maintenant = new Date("2026-11-10T00:00:00Z");
+
+  it("n'est pas due avant 2 jours depuis la dernière relance mail", () => {
+    const relances: Relance[] = [{ type: "mail", date: "2026-11-09T00:00:00Z" }];
+    expect(relanceTelephoniqueDue(relances, maintenant)).toBe(false);
+  });
+
+  it("est due 2 jours ou plus après la dernière relance mail", () => {
+    const relances: Relance[] = [{ type: "mail", date: "2026-11-08T00:00:00Z" }];
+    expect(relanceTelephoniqueDue(relances, maintenant)).toBe(true);
+  });
+
+  it("n'est plus due si une relance téléphonique a déjà été tracée après la relance mail", () => {
+    const relances: Relance[] = [
+      { type: "mail", date: "2026-11-05T00:00:00Z" },
+      { type: "telephone", date: "2026-11-09T00:00:00Z" },
+    ];
+    expect(relanceTelephoniqueDue(relances, maintenant)).toBe(false);
   });
 });
